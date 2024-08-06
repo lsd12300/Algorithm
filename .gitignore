@@ -8,3 +8,7 @@ Algorithm.sln
 Algorithm.userprefs
 Assembly-CSharp.csproj
 Assembly-CSharp-firstpass.csproj
+Temp/
+Unity.2D*
+UnityEditor.UI.csproj
+UnityEngine.UI.csproj

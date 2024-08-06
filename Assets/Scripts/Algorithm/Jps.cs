@@ -1,395 +1,421 @@
-﻿using System.Collections;
+/*---------------------------------------------------------------------------------------
+-- 负责人: shengde.lin
+-- 创建时间: 2023-12-26 10:04:06
+-- 概述: 
+--      JPS寻路算法
+---------------------------------------------------------------------------------------*/
+
+using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.ConstrainedExecution;
+using System.Runtime.InteropServices;
+using System.Text;
 using UnityEngine;
-using Priority_Queue;
+using UnityEngine.UI;
+
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEditor.Experimental.GraphView;
+using UnityEditorInternal;
+#endif
 
 
-namespace Algorithm
+namespace Onemt.Algorithm
 {
-    /// <summary>
-    ///  Jps 寻路算法
-    ///     基于 A* 的改进算法, 大部分情况下 比 A* 快一个数量级
-    ///     
-    ///  适用限制:
-    ///     1. 无向无权重的规则网络
-    ///     2. 网格节点 邻居点数量 小于等于8, 且 仅有可走和不可走两种状态
-    ///     3. 每次 水平或垂直轴向移动代价为 1, 对角线移动代价为 √2
-    ///     4. 不能穿越不可通行的网格节点
-    ///     
-    /// 
-    ///     网格 左上角为 原点(0, 0)
-    /// </summary>
-    public class Jps
-    {
-        public static readonly Vector2Int NullVec = new Vector2Int(-1, -1);
-        private readonly Jps_Grid _grid;
-        private Vector2Int _start = NullVec;
-        private Vector2Int _end = NullVec;
 
-        // 估值函数 优先队列
-        private readonly FastPriorityQueue<Jps_Node> _openSet;
-
-
-        public Jps(Jps_Grid grid, int cap = 256)
-        {
-            _grid = grid;
-            _openSet = new FastPriorityQueue<Jps_Node>(cap);
-        }
-
-
-        public List<Vector2Int> FindPath(Vector2Int start, Vector2Int end)
-        {
-            if (!_grid.CanMove(start) || !_grid.CanMove(end))
-                return null;
-            _grid.Clear();
-            _start = start;
-            _end = end;
-            _openSet.Clear();
-
-            // 后面大括号内为  初始化列表
-            var startNode = new Jps_Node(_start) { Cost=0,IsOpen=false,IsClose=false,IsForce=false };
-            _openSet.Enqueue(startNode, startNode.Cost);
-            // 每次取 估值函数最小的节点 检测
-            while (_openSet.Count > 0)
-            {
-                Jps_Node cur = _openSet.Dequeue();
-                cur.IsClose = true;
-                if (cur.Pos == _end)
-                    return Trace(cur);
-                IdentitySuccessors(cur);
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        ///  搜索 后续跳点
-        /// </summary>
-        /// <param name="node"></param>
-        private void IdentitySuccessors(Jps_Node node)
-        {
-            // 剪枝 获取所有需要检测的邻居点
-            var neighbours = _grid.Neighbours(node);
-            foreach (var n in neighbours)
-            {
-                Vector2Int jumpPos = Jump(node.Pos, n.Pos - node.Pos, 1);
-                if (jumpPos == NullVec)
-                    continue;
-
-                Jps_Node jumpNode = _grid[jumpPos.x, jumpPos.y];
-                if (jumpNode.IsClose)       // 跳点已检测过, 过滤
-                    continue;
-
-                float moveCost = (jumpPos - node.Pos).magnitude;
-                float newCost = node.Cost + moveCost;
-                if (!jumpNode.IsOpen)       // 判断加入 OpenSet中
-                {
-                    jumpNode.IsOpen = true;
-                    jumpNode.Parent = node;
-                    jumpNode.Cost = newCost;
-                    _openSet.Enqueue(jumpNode, jumpNode.Cost);
-                }
-                // 更新代价
-                else if (newCost < jumpNode.Cost)
-                {
-                    jumpNode.Cost = newCost;
-                    jumpNode.Parent = node;
-                    _openSet.UpdatePriority(jumpNode, newCost);
-                }
-            }
-        }
-
-        /// <summary>
-        ///  获取跳点
-        /// </summary>
-        /// <param name="ndoe"></param>
-        /// <param name="dir"></param>
-        /// <param name="k"></param>
-        /// <returns></returns>
-        private Vector2Int Jump(Vector2Int node, Vector2Int dir, int k)
-        {
-            Vector2Int next = node + dir * k;
-            if (!_grid.CanMove(next))
-            {
-                return NullVec;
-            }
-            // 终点 也是跳点
-            if (next == _end)
-            {
-                return next;
-            }
-            _grid[next.x, next.y].Parent = _grid[node.x, node.y];
-
-            // 点存在 强迫邻居点, 则点为 跳点
-            var l = _grid.Neighbours(_grid[next.x, next.y]);
-            foreach (var n in l)
-            //foreach (var n in _grid.Neighbours(_grid[next.x, next.y]))
-            {
-                if (n.IsForce)
-                    return next;
-            }
-
-            // 对角线移动
-            if (dir.x != 0 && dir.y != 0)
-            {
-                // 垂直轴向
-                if (Jump(next, new Vector2Int(0, dir.y), 1) != NullVec)
-                    return next;
-                // 水平轴向
-                if (Jump(next, new Vector2Int(dir.x, 0), 1) != NullVec)
-                    return next;
-                // 对角移动, 不经过障碍顶点,  在此处限制
-                //if (_grid.CanMove(next.x, next.y + dir.y) && _grid.CanMove(next.x + dir.x, next.y))
-                //    return Jump(next, dir, k + 1);
-                //return NullVec;
-            }
-
-            // 继续当前方向搜索
-            return Jump(node, dir, k + 1);
-        }
-
-        /// <summary>
-        ///  回溯路径
-        /// </summary>
-        /// <param name="node"></param>
-        /// <returns></returns>
-        private List<Vector2Int> Trace(Jps_Node node)
-        {
-            var path = new List<Vector2Int>();
-            path.Add(node.Pos);
-            while (node.Parent != null)
-            {
-                node = node.Parent;
-                path.Add(node.Pos);
-            }
-            path.Reverse();
-            return path;
-        }
-    }
 
     /// <summary>
-    ///  网格节点
-    ///     继承 FastPriorityQueueNode
-    ///     使用第三方库 优先队列
+    ///  A*算法的改进算法
     /// </summary>
-    public class Jps_Node : FastPriorityQueueNode
+    public class JPS
     {
-        public Vector2Int Pos { get; private set; }
 
-        public Jps_Node(Vector2Int vector2Int)
+        public class JPSNode
         {
-            this.Pos = vector2Int;
-        }
+            public int X;
+            public int Y;
+            public JPSNode Parent;
+            public int G; // 起点到当前节点的消耗
+            public int H; // 当前节点到终点的估值消耗
 
-        public Jps_Node(int x, int y) : this(new Vector2Int(x, y)) { }
-
-        // 移动消耗
-        public float Cost { get; set; }
-
-        // 上一个路径点
-        public Jps_Node Parent { get; set; }
-
-        public bool IsOpen { get; set; }
-
-        // 已检测标记
-        public bool IsClose { get; set; }
-
-        // 强制邻居点  标记
-        public bool IsForce { get; set; }
-
-        public void Reset()
-        {
-            Cost = 0;
-            Parent = null;
-            IsClose = false;
-            IsOpen = false;
-            IsForce = false;
-        }
-    }
-
-    /// <summary>
-    ///  寻路整个网格
-    ///     左上角为 原点(0, 0)
-    /// </summary>
-    public class Jps_Grid
-    {
-        private Vector2Int[] _dirs =
-        {
-            // 轴向
-            new Vector2Int(0, 1),
-            new Vector2Int(1, 0),
-            new Vector2Int(0, -1),
-            new Vector2Int(-1, 0),
-
-            // 对角线
-            new Vector2Int(1, 1),
-            new Vector2Int(1, -1),
-            new Vector2Int(-1, -1),
-            new Vector2Int(-1, 1),
-        };
-
-        // 边界
-        private readonly int _boundMaxX;
-        private readonly int _boundMaxY;
-        private readonly int _boundMinX;
-        private readonly int _boundMinY;
-
-        // 格子可行走标记
-        private readonly bool[,] _gridFlags;
-        private readonly Jps_Node[,] _grid;
-
-
-        public Jps_Grid(bool[, ] flags)
-        {
-            _boundMinX = 0;
-            _boundMaxX = flags.GetUpperBound(0);        // 数组长度 表示边界
-            _boundMinY = 0;
-            _boundMaxY = flags.GetUpperBound(1);
-            _gridFlags = flags;
-
-            _grid = new Jps_Node[_boundMaxX + 1, _boundMaxY + 1];
-            for (int x = _boundMinX; x <= _boundMaxX; x++)
+            public JPSNode() { }
+            public JPSNode(Vector2Int pos, Vector2Int end, int g, JPSNode p)
             {
-                for (int y = _boundMinY; y <= _boundMaxY; y++)
-                {
-                    _grid[x, y] = new Jps_Node(x, y);
-                }
+                Set(pos, end, g, p);
+            }
+
+
+            public JPSNode Set(Vector2Int pos, Vector2Int end, int g, JPSNode p)
+            {
+                X = pos.x;
+                Y = pos.y;
+                G = g;
+                H = Math.Abs(end.x - pos.x) + Math.Abs(end.y - pos.y);
+                Parent = p;
+                return this;
             }
         }
 
-        public void Clear()
-        {
-            if (_grid != null)
-            {
-                foreach (var item in _grid)
-                {
-                    if (item != null)
-                        item.Reset();
-                }
-            }
-        }
 
-        public Jps_Node this[int x, int y] { get {
-                return _grid[x, y];
-            } }
+        private int m_lenH = 0;
+        private int m_lenV = 0;
+        private Vector2Int m_end;
+        private List<JPSNode> m_openList = new List<JPSNode>();
+        private bool[,] m_closedList;
 
-        // 是否可走,  边界内 且 格子可走
-        public bool CanMove(int x, int y)
-        {
-            return InBounds(x, y) && _gridFlags[x, y];
-        }
+#if JPS_LOG
+        private StringBuilder m_sb = new StringBuilder();
+#endif
 
-        public bool CanMove(Vector2Int pos)
-        {
-            return InBounds(pos.x, pos.y) && _gridFlags[pos.x, pos.y];
-        }
 
-        public bool InBounds(int x, int y)
+        public JPS() { }
+        public JPS(int lenH, int lenV)
         {
-            return x >= _boundMinX && x <= _boundMaxX &&
-                   y >= _boundMinY && y <= _boundMaxY;
+            m_lenH=lenH;
+            m_lenV=lenV;
+            m_closedList = new bool[m_lenV, m_lenH];
         }
 
         /// <summary>
-        ///  获取 需要检测的所有邻居点
-        ///     使用  轴向移动剪枝 和 对角线移动剪枝 优化查找的邻居点数量
+        ///  设置寻路的网格大小
         /// </summary>
-        /// <param name="node"></param>
-        /// <returns></returns>
-        internal List<Jps_Node> Neighbours(Jps_Node node)
+        /// <param name="lenH"></param>
+        /// <param name="lenV"></param>
+        public void ResetGridSize(int lenH, int lenV)
         {
-            List<Jps_Node> list = new List<Jps_Node>(8);
-            if (node.Parent != null)
+            m_lenV = lenV;
+            m_lenH = lenH;
+            if (m_closedList == null || m_closedList.GetLength(0) != m_lenV || m_closedList.GetLength(1) != m_lenH)
             {
-                // 当前移动方向
-                Vector2Int curDir = node.Pos - node.Parent.Pos;
-                curDir.x /= curDir.x == 0 ? 1 : Mathf.Abs(curDir.x);
-                curDir.y /= curDir.y == 0 ? 1 : Mathf.Abs(curDir.y);
-
-                // 对角线移动
-                //      检测  水平轴向 和 垂直轴向 及 当前对角方向 点
-                if (curDir.x != 0 && curDir.y != 0)
+                m_closedList = new bool[m_lenV, m_lenH];
+            }
+            for (int v = 0; v < m_lenV; v++)
+            {
+                for (int h = 0; h < m_lenH; h++)
                 {
-                    if (CanMove(node.Pos.x + curDir.x, node.Pos.y))
-                        list.Add(this[node.Pos.x + curDir.x, node.Pos.y]);
-
-                    if (CanMove(node.Pos.x, node.Pos.y + curDir.y))
-                        list.Add(this[node.Pos.x, node.Pos.y + curDir.y]);
-
-                    // 对角移动时 如果要确保不能经过 障碍格子顶点,  在此处添加限制
-                    //  011
-                    //  111
-                    //  111
-                    //      一般不能从[0,1] 走到 [1,0], 因为会经过障碍格子顶点
-                    //if (CanMove(node.Pos.x, node.Pos.y + curDir.y) && CanMove(node.Pos.x + curDir.x, node.Pos.y) && CanMove(node.Pos.x + curDir.x, node.Pos.y + curDir.y))
-                    if (CanMove(node.Pos.x + curDir.x, node.Pos.y + curDir.y))
-                        list.Add(this[node.Pos.x + curDir.x, node.Pos.y + curDir.y]);
+                    m_closedList[v, h] = false;
                 }
-                else if (curDir.x != 0)
-                {
-                    // 水平轴向移动  检测
-                    //      1. 当前方向
-                    //      2. 当前朝向左后方为障碍，左方可走，返回 左前方(普通邻居点) 和 左方点(强迫邻居点)
-                    //      3. 当前朝向右后方为障碍，右方可走，返回 右前方(普通邻居点) 和 右方点(强迫邻居点)
-                    if (CanMove(node.Pos.x + curDir.x, node.Pos.y))
-                        list.Add(this[node.Pos.x + curDir.x, node.Pos.y]);
+            }
+        }
 
-                    if (CanMove(node.Pos.x, node.Pos.y + 1) && !CanMove(node.Pos.x - curDir.x, node.Pos.y + 1))
+        /// <summary>
+        ///  开始寻路
+        /// </summary>
+        /// <param name="grids">网格</param>
+        /// <param name="start">起点</param>
+        /// <param name="end">终点</param>
+        /// <returns></returns>
+        public List<Vector2Int> FindPath(int[,] grids, Vector2Int start, Vector2Int end)
+        {
+            // 初始化和清理
+            Clear();
+            ResetGridSize(grids.GetLength(1), grids.GetLength(0));
+
+
+            // 开始寻路
+            m_end = end;
+            m_openList.Add(new JPSNode(start, end, 0, null));
+
+            var dirList = new List<Vector2Int>();
+            while (m_openList.Count > 0)
+            {
+                // 取权重最低的点
+                // TODO:  尝试最小堆 看是否有提升
+                var minF = int.MaxValue;
+                var minIndex = -1;
+                for (int i = 0; i < m_openList.Count; i++)
+                {
+                    if (m_openList[i].G + m_openList[i].H < minF)
                     {
-                        list.Add(this[node.Pos.x, node.Pos.y + 1]);
-                        this[node.Pos.x, node.Pos.y + 1].IsForce = true;        // 左方点为 强迫邻居点
-                        if(CanMove(node.Pos.x + curDir.x, node.Pos.y + 1))
-                            list.Add(this[node.Pos.x + curDir.x, node.Pos.y + 1]);
+                        minF = m_openList[i].G + m_openList[i].H;
+                        minIndex = i;
                     }
+                }
+                var minPos = m_openList[minIndex];
+                m_openList.RemoveAt(minIndex);
+                m_closedList[minPos.Y, minPos.X] = true;
 
-                    if (CanMove(node.Pos.x, node.Pos.y - 1) && !CanMove(node.Pos.x - curDir.x, node.Pos.y - 1))
+                // 寻路完成
+                if (minPos.X == end.x && minPos.Y == end.y)
+                {
+                    var ret = new List<Vector2Int>();
+                    var waitAdd = new Vector2Int(-1, -1);
+                    while (minPos != null)
                     {
-                        list.Add(this[node.Pos.x, node.Pos.y - 1]);
-                        this[node.Pos.x, node.Pos.y - 1].IsForce = true;        // 右方点为 强迫邻居点
-                        if (CanMove(node.Pos.x + curDir.x, node.Pos.y - 1))
-                            list.Add(this[node.Pos.x + curDir.x, node.Pos.y - 1]);
+                        if (ret.Count <= 0) ret.Add(new Vector2Int(minPos.X, minPos.Y));
+                        else if (waitAdd.x == -1) waitAdd.Set(minPos.X, minPos.Y); // 先记录下, 等下个点确认不共线再加
+                        else
+                        {
+                            var dirX1 = waitAdd.x - ret[ret.Count - 1].x;
+                            var dirY1 = waitAdd.y - ret[ret.Count - 1].y;
+                            var dirX2 = minPos.X - waitAdd.x;
+                            var dirY2 = minPos.Y - waitAdd.y;
+                            // 三点共线.  丢弃中间点
+                            if ((dirX1 == 0 && dirX2 == 0) || (dirY1 == 0 && dirY2 == 0) ||
+                                (dirX1 * dirY2 != 0 && dirX1 * dirY2 == dirX2 * dirY1))
+                            {
+                                waitAdd.Set(minPos.X, minPos.Y);
+                            }
+                            else
+                            {
+                                ret.Add(waitAdd);
+                                waitAdd.Set(minPos.X, minPos.Y);
+                            }
+                        }
+                        minPos = minPos.Parent;
                     }
+                    if (ret[ret.Count - 1] != waitAdd) ret.Add(waitAdd);
+
+                    ret.Reverse();
+                    Clear();
+                    return ret;
+                }
+
+
+                // 水平和垂直 及对角斜向方向搜索
+                var curPos = new Vector2Int(minPos.X, minPos.Y);
+                dirList.Clear();
+                if (minPos.Parent == null)
+                {
+                    // 直线方向
+                    dirList.Add(Vector2Int.up);
+                    dirList.Add(Vector2Int.down);
+                    dirList.Add(Vector2Int.left);
+                    dirList.Add(Vector2Int.right);
+
+                    // 对角方向
+                    dirList.Add(new Vector2Int(-1, 1));
+                    dirList.Add(new Vector2Int(1, 1));
+                    dirList.Add(new Vector2Int(1, -1));
+                    dirList.Add(new Vector2Int(-1, -1));
                 }
                 else
                 {
-                    // 垂直轴向移动
-                    //      1. 当前方向
-                    //      2. 当前朝向左后方为障碍，左方可走，返回 左前方(普通邻居点) 和 左方点(强迫邻居点)
-                    //      3. 当前朝向右后方为障碍，右方可走，返回 右前方(普通邻居点) 和 右方点(强迫邻居点)
-                    if (CanMove(node.Pos.x, node.Pos.y + curDir.y))
-                        list.Add(this[node.Pos.x, node.Pos.y + curDir.y]);
+                    var moveDirH = minPos.X - minPos.Parent.X;
+                    var moveDirV = minPos.Y - minPos.Parent.Y;
+                    moveDirH = moveDirH != 0 ? moveDirH / Math.Abs(moveDirH) : 0; // 转化为单位长度
+                    moveDirV = moveDirV != 0 ? moveDirV / Math.Abs(moveDirV) : 0;
 
-                    if (CanMove(node.Pos.x - 1, node.Pos.y) && !CanMove(node.Pos.x - 1, node.Pos.y - curDir.y))
+                    var moveDir = new Vector2Int(moveDirH, moveDirV);
+
+                    // 父方向为斜向移动.  则沿水平和垂直分量 及当前方向搜索
+                    if (moveDirH != 0 && moveDirV != 0)
                     {
-                        list.Add(this[node.Pos.x - 1, node.Pos.y]);
-                        this[node.Pos.x - 1, node.Pos.y].IsForce = true;        // 左方点为 强迫邻居点
-                        if (CanMove(node.Pos.x - 1, node.Pos.y + curDir.y))
-                            list.Add(this[node.Pos.x - 1, node.Pos.y + curDir.y]);
+                        dirList.Add(new Vector2Int(moveDirH, 0));
+                        dirList.Add(new Vector2Int(0, moveDirV));
                     }
+                    dirList.Add(new Vector2Int(moveDirH, moveDirV)); // 当前方向
 
-                    if (CanMove(node.Pos.x + 1, node.Pos.y) && !CanMove(node.Pos.x + 1, node.Pos.y - curDir.y))
+
+                    // 强迫邻居节点
+                    var forceNeighbour1 = Vector2Int.zero;
+                    var forceNeighbour2 = Vector2Int.zero;
+                    FindForceNeighbour(grids, minPos.X, minPos.Y, moveDir, ref forceNeighbour1, ref forceNeighbour2);
+                    if (forceNeighbour1 != Vector2Int.zero) dirList.Add(forceNeighbour1 - curPos);
+                    if (forceNeighbour2 != Vector2Int.zero) dirList.Add(forceNeighbour2 - curPos);
+                }
+
+#if JPS_LOG
+                m_sb.Length = 0;
+                m_sb.Append($"({minPos.X},{minPos.Y})--->");
+                foreach (var dir in dirList)
+                {
+                    m_sb.Append($"({dir.x},{dir.y}),");
+                }
+                Debug.LogError(m_sb.ToString());
+#endif
+
+                foreach (var dir in dirList)
+                {
+                    curPos = new Vector2Int(minPos.X, minPos.Y); // 缓存当前位置
+
+                    // 沿一个方向一直搜索到 跳点或障碍或边界
+                    while (true)
                     {
-                        list.Add(this[node.Pos.x + 1, node.Pos.y]);
-                        this[node.Pos.x + 1, node.Pos.y].IsForce = true;        // 右方点为 强迫邻居点
-                        if (CanMove(node.Pos.x + 1, node.Pos.y + curDir.y))
-                            list.Add(this[node.Pos.x + 1, node.Pos.y + curDir.y]);
+                        var pos = new Vector2Int(curPos.x + dir.x, curPos.y + dir.y);
+                        if (pos.x < 0 || pos.x >= m_lenH || pos.y < 0 || pos.y >= m_lenV) break;
+                        if (IsBlockNoBorder(grids, pos)) break;
+
+                        if (IsJumpPoint(grids, pos, dir))
+                        {
+                            if (!m_closedList[pos.y, pos.x])
+                            {
+                                m_openList.Add(new JPSNode(pos, end, minPos.G + Math.Abs(pos.x - minPos.X) + Math.Abs(pos.y - minPos.Y), minPos));
+                            }
+                            break;
+                        }
+                        curPos = pos;
                     }
                 }
             }
+
+            Clear();
+            return null;
+        }
+
+        private bool IsJumpPoint(int[,] grids, Vector2Int pos, Vector2Int dir)
+        {
+            if (pos == m_end) return true;
+
+
+            // 水平或垂直方向
+            if (dir.x == 0 || dir.y == 0)
+            {
+                return HasForceNeighbour(grids, pos, dir);
+            }
+            // 斜向
             else
             {
-                // 起点,  直接返回所有可移动点
-                for (int i = 0; i < 8; i++)
+                if (HasForceNeighbour(grids, pos, dir)) return true;
+
+                // 斜向搜索时  需要沿水平和垂直方向搜索, 如果搜到跳点,  则当前也是跳点
+                var newDir = new Vector2Int(dir.x, 0);
+                var newStartPos = pos; // 缓存水平或垂直搜索起始节点
+                while (true)
                 {
-                    int x = node.Pos.x + _dirs[i].x;
-                    int y = node.Pos.y + _dirs[i].y;
-                    if (CanMove(x, y))
+                    var newPos = newStartPos + newDir;
+                    if (newPos.x < 0 || newPos.x >= m_lenH || newPos.y < 0 || newPos.y >= m_lenV) break;
+                    if (IsBlockNoBorder(grids, newPos)) break;
+
+                    if (IsJumpPoint(grids, newPos, newDir))
                     {
-                        list.Add(this[x, y]);
+                        return true;
                     }
+                    newStartPos = newPos;
+                }
+
+                newDir = new Vector2Int(0, dir.y);
+                newStartPos = pos; // 缓存水平或垂直搜索起始节点
+                while (true)
+                {
+                    var newPos = newStartPos + newDir;
+                    if (newPos.x < 0 || newPos.x >= m_lenH || newPos.y < 0 || newPos.y >= m_lenV) break;
+                    if (IsBlockNoBorder(grids, newPos)) break;
+
+                    if (IsJumpPoint(grids, newPos, newDir))
+                    {
+                        return true;
+                    }
+                    newStartPos = newPos;
                 }
             }
-            return list;
+
+            return false;
+        }
+
+        /// <summary>
+        ///  强迫邻居节点
+        /// </summary>
+        /// <returns></returns>
+        private bool HasForceNeighbour(int[,] grids, Vector2Int pos, Vector2Int dir)
+        {
+            // 水平或垂直方向
+            if (dir.x == 0 || dir.y == 0)
+            {
+                // 前进方向的侧边不可走, 且前进方向前方和侧前方可走, 则侧前方为强迫邻居节点
+                if (IsBlock(grids, pos.x + dir.y, pos.y + dir.x) && CanWalk(grids, pos.x + dir.x, pos.y + dir.y) && CanWalk(grids, pos.x + dir.x + dir.y, pos.y + dir.y + dir.x))
+                {
+                    return true;
+                }
+                if (IsBlock(grids, pos.x - dir.y, pos.y - dir.x) && CanWalk(grids, pos.x + dir.x, pos.y + dir.y) && CanWalk(grids, pos.x + dir.x - dir.y, pos.y + dir.y - dir.x))
+                {
+                    return true;
+                }
+            }
+            // 斜方向
+            else
+            {
+                // 前进方向两侧
+                if (IsBlock(grids, pos.x - dir.x, pos.y) && CanWalk(grids, pos.x, pos.y + dir.y) && CanWalk(grids, pos.x - dir.x, pos.y + dir.y))
+                {
+                    return true;
+                }
+                if (IsBlock(grids, pos.x, pos.y - dir.y) && CanWalk(grids, pos.x + dir.x, pos.y) && CanWalk(grids, pos.x + dir.x, pos.y - dir.y))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        ///  查找当前点 在移动方向上的 强迫邻居节点
+        /// </summary>
+        private void FindForceNeighbour(int[,] grids, Vector2Int pos, Vector2Int dir, ref Vector2Int neighbour1, ref Vector2Int neighbour2)
+        {
+            FindForceNeighbour(grids, pos.x, pos.y, dir, ref neighbour1, ref neighbour2);
+        }
+
+        private void FindForceNeighbour(int[,] grids, int x, int y, Vector2Int dir, ref Vector2Int neighbour1, ref Vector2Int neighbour2)
+        {
+            // 水平或垂直方向
+            if (dir.x == 0 || dir.y == 0)
+            {
+                // 前进方向的侧边不可走, 且前进方向前方和侧前方可走, 则侧前方为强迫邻居节点
+                if (IsBlock(grids, x + dir.y, y + dir.x) && CanWalk(grids, x + dir.x, y + dir.y) && CanWalk(grids, x + dir.x + dir.y, y + dir.y + dir.x))
+                {
+                    neighbour1.Set(x + dir.x + dir.y, y + dir.y + dir.x);
+                }
+                if (IsBlock(grids, x - dir.y, y - dir.x) && CanWalk(grids, x + dir.x, y + dir.y) && CanWalk(grids, x + dir.x - dir.y, y + dir.y - dir.x))
+                {
+                    neighbour2.Set(x + dir.x - dir.y, y + dir.y - dir.x);
+                }
+            }
+            // 斜方向
+            else
+            {
+                // 前进方向两侧
+                if (IsBlock(grids, x - dir.x, y) && CanWalk(grids, x, y + dir.y) && CanWalk(grids, x - dir.x, y + dir.y))
+                {
+                    neighbour1.Set(x - dir.x, y + dir.y);
+                }
+                if (IsBlock(grids, x, y - dir.y) && CanWalk(grids, x + dir.x, y) && CanWalk(grids, x + dir.x, y - dir.y))
+                {
+                    neighbour2.Set(x + dir.x, y - dir.y);
+                }
+            }
+        }
+
+        /// <summary>
+        ///  是否 不可走节点 (不包括边界)
+        /// </summary>
+        private bool IsBlock(int[,] grids, Vector2Int pos)
+        {
+            return IsBlock(grids, pos.x, pos.y);
+        }
+        private bool IsBlock(int[,] grids, int x, int y)
+        {
+            if (x < 0 || x >= m_lenH || y < 0 || y >= m_lenV) return false;
+            return grids[y, x] > 0;
+        }
+
+        /// <summary>
+        ///  不检查边界
+        /// </summary>
+        private bool IsBlockNoBorder(int[,] grids, Vector2Int pos)
+        {
+            return IsBlockNoBorder(grids, pos.x, pos.y);
+        }
+        private bool IsBlockNoBorder(int[,] grids, int x, int y)
+        {
+            return grids[y, x] > 0;
+        }
+
+        private bool CanWalk(int[,] grids, Vector2Int pos)
+        {
+            return CanWalk(grids, pos.x, pos.y);
+        }
+        private bool CanWalk(int[,] grids, int x, int y)
+        {
+            if (x < 0 || x >= m_lenH || y < 0 || y >= m_lenV) return false;
+            return grids[y, x] <= 0;
+        }
+
+        private void Clear()
+        {
+            m_openList.Clear();
         }
     }
 }
